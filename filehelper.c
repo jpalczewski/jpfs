@@ -1,70 +1,13 @@
-#include <stdlib.h>
-#include <assert.h>
-#include <string.h>
 #include "filehelper.h"
 
 #ifdef _MSC_VER
 #define _CRT_SECURE_NO_WARNINGS
 #endif
 
-jp_table * _create_jpt(int len)
-{
-	jp_table * new_jpt;
-	int i;
 
-	new_jpt = calloc(len, sizeof(jp_table));
-	for (i = 0; i < len; ++i)
-	{
-		new_jpt[i] = NO_FILE;
-	}
 
-	return new_jpt;
-}
 
-struct disk_file * _create_df(unsigned int size, unsigned int sector_size)
-{
-	struct disk_file *ptr = calloc(1, sizeof(struct disk_file));
-	DIE_ON_NULL(ptr);
 
-	ptr->magic[0] = 'J'; ptr->magic[1] = 'P'; ptr->magic[2] = ptr->magic[3] = 0;
-	ptr->size = size;
-	ptr->sector_size = sector_size;
-	ptr->data_offset = sizeof(struct disk_file) + (size / sector_size)*sizeof(jp_table);
-
-	return ptr;
-}
-
-int _write_sector(struct disk_handle * disk, int sector, char * data, int size)
-{
-	printf("[DEBUG] _write_sector(%d, %d):%s\n", sector, size, data);
-	int result;
-	fseek(disk->fh, disk->dfh->data_offset + sector*disk->dfh->sector_size, SEEK_SET);
-	result = fwrite(data, size, 1, disk->fh);
-	
-	return 0;
-}
-
-sector_number _get_first_free_sector(struct disk_handle *dh)
-{
-	int j;
-	int size = DH_TO_LEN(dh);
-
-	for (j = 0; j < size; ++j)
-	{
-		if (dh->jpth[j] == NO_FILE)
-			return j;
-	}
-	assert(j == size);
-
-	return -1;
-}
-
-int	_update_jpt(struct disk_handle * dh)
-{
-	fseek(dh->fh, sizeof(struct disk_file), SEEK_SET);
-	fwrite(dh->jpth, sizeof(jp_table), DH_TO_LEN(dh), dh->fh);
-	return 0;
-}
 
 sector_number disk_write(struct disk_handle *dh, char *data, unsigned int size)
 {
@@ -98,11 +41,12 @@ sector_number disk_write(struct disk_handle *dh, char *data, unsigned int size)
 
 void close_disk(struct disk_handle *dh)
 {
+	fseek(dh->fh, 0, SEEK_SET);
+	fwrite(dh->dfh, sizeof(struct disk_file), 1, dh->fh);
 	fclose(dh->fh);
 	free(dh->jpth);
 	free(dh->dfh);
-	/* 	free(dh);
-	/* freeing the rest... */
+	free(dh);
 }
 
 struct disk_handle * create_disk(char* name, unsigned int size, unsigned int sector_size)
@@ -117,9 +61,9 @@ struct disk_handle * create_disk(char* name, unsigned int size, unsigned int sec
 	dh = calloc(1, sizeof(struct disk_handle));
 
 #ifdef _MSC_VER
-	dh->fh = fopen(name, "wb");
+	dh->fh = fopen(name, "wb+");
 #else
-	dh->fh = fopen(name, "w");
+	dh->fh = fopen(name, "w+");
 #endif
 	DIE_ON_NULL(dh->fh);
 
@@ -140,6 +84,7 @@ struct disk_handle * create_disk(char* name, unsigned int size, unsigned int sec
 		fwrite(sector, sizeof(char), sector_size, dh->fh);
 	}
 
+	free(sector);
 	return dh;
 }
 struct disk_handle *open_disk(char *name)
@@ -162,7 +107,9 @@ struct disk_handle *open_disk(char *name)
 	result = fread(dh->dfh, sizeof(struct disk_file), 1, dh->fh);
 	if (ferror(dh->fh))
 		return NULL;
-	
+	if ((dh->dfh->magic[0] != 'J') || (dh->dfh->magic[1] != 'P'))
+		return NULL;
+
 	disk_len_sectors = DH_TO_LEN(dh);
 	dh->jpth = _create_jpt(disk_len_sectors);
 	DIE_ON_NULL(dh->jpth);
@@ -173,38 +120,64 @@ struct disk_handle *open_disk(char *name)
 	return dh;
 }
 
-char * _read_sector(struct disk_handle * disk, unsigned int sector)
-{
-	int result;
-	char * buf = calloc(disk->dfh->sector_size, 1);
-
-	fseek(disk->fh, disk->dfh->data_offset + sector*disk->dfh->sector_size, SEEK_SET);
-	result = fread(buf, disk->dfh->sector_size, 1, disk->fh);
-	return buf;
-}
-
 
 char* disk_read(struct disk_handle *dh, sector_number sn)
 {
-	char  *result, *newresult;
+	char  *result;
 	char *newptr;
-	char *ptr_new_sector;
 	sector_number next = sn;
 	unsigned int size = 0;
 
-	result = calloc(size*dh->dfh->sector_size, DH_TO_LEN(dh));
-	
+	//result = calloc(dh->dfh->sector_size, DH_TO_LEN(dh));
+	result = calloc(dh->dfh->sector_size, _file_length(dh, sn));
+
 	do {
 
 		assert(dh->jpth[sn] != NO_FILE);
-		size++;
-	//	result = realloc(newresult, size*dh->dfh->sector_size);
 
 		newptr = _read_sector(dh, sn);
-		memcpy(result + (size - 1)*dh->dfh->sector_size, newptr, dh->dfh->sector_size);
+		memcpy(result + (size++)*dh->dfh->sector_size, newptr, dh->dfh->sector_size);
 		free(newptr);
-		newresult = result;
 	} while ((sn = dh->jpth[sn]) != FILE_END);
 
 	return result;
+}
+
+int	disk_erase(struct disk_handle *dh, sector_number sn)
+{
+	sector_number next;
+	do
+	{
+		assert(dh->jpth[sn] != NO_FILE);
+		
+		next = dh->jpth[sn];
+		_unlink_sector(dh, sn);
+
+	} while ((sn = next) != FILE_END);
+}
+
+void list_sectors(struct disk_handle *dh)
+{
+	int j;
+
+	puts("Disk usage:");
+	printf("[");
+	for (j = 0; j < DH_TO_LEN(dh); ++j)
+	{
+		switch(dh->jpth[j])
+		{
+		case FILE_END:
+			printf("%%");
+			break;
+		case NO_FILE:
+			printf(" ");
+			break;
+		default:
+			printf("#");
+			break;
+		}
+	}
+	
+	printf("]\n");
+	puts("'%' - file end, '#' - file part,' ' - free space");
 }
