@@ -105,9 +105,8 @@ int add_file(struct formatted_disk_handle *fdh, char *name)
 	fread(buffer, sizeof(char), file_size, f);
 	sector = disk_write(fdh->dh, buffer, file_size);
 	
-	fdh->files->first_sector = sector;
+	fdh->files[selected_number].first_sector = sector;
 	memcpy(fdh->files[selected_number].name, proposed_name, 16);
-	fdh->files[selected_number].name[15] = 0;
 	fdh->files[selected_number].valid = 1;
 	fdh->files[selected_number].size = file_size;
 

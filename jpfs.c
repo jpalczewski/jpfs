@@ -4,6 +4,8 @@
 #include "filehelper.h"
 #include "directory.h"
 
+
+
 int main(int argc, char **argv)
 {
 	struct formatted_disk_handle *fdh;
@@ -28,7 +30,7 @@ int main(int argc, char **argv)
 		return 0;
 	}
 	else if (strcmp(argv[1], "destroy") == 0)
-		return delete_formatted_disk(argv[1]);
+		return delete_formatted_disk(argv[2]);
 	
 	
 
